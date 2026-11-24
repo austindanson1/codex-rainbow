@@ -11,7 +11,8 @@ import time
 app = Path(sys.argv[1]).resolve()
 binary = app / "Contents/MacOS/rainbow"
 base = Path(sys.argv[2]).resolve()
-root = Path(tempfile.mkdtemp(dir=base, prefix="launcher-test-"))
+scratch = tempfile.TemporaryDirectory(dir=base, prefix="launcher-test-")
+root = Path(scratch.name)
 state, index = root / "rainbow", root / "codex" / "session_index.jsonl"
 index.parent.mkdir()
 profile = root / "profile"
@@ -91,4 +92,5 @@ for attempt in (1, 2):
             os.kill(child, signal.SIGTERM)
         process.wait(timeout=15)
     assert record()["status"] == "closed"
+scratch.cleanup()
 print("Cold start and reopen passed. Both isolated Codex processes exited.")

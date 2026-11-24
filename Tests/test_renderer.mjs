@@ -1,7 +1,7 @@
 // Run only against a fresh, signed-out test profile on this Mac.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
@@ -51,7 +51,8 @@ try {
         return evaluate(`(() => {
             const pane = document.createElement('div');
             pane.id = 'sample-sidebar';
-            pane.style.cssText = 'position:fixed;z-index:2147483647;inset:30px auto auto 30px;width:300px;height:350px;overflow:auto;background:#232323;color:white;font:15px system-ui;padding:8px;border-radius:10px;';
+            pane.popover = 'manual';
+            pane.style.cssText = 'position:fixed;z-index:2147483647;inset:30px auto auto 30px;width:300px;height:350px;margin:0;border:0;pointer-events:auto;overscroll-behavior:contain;overflow:auto;background:#232323;color:white;font:15px system-ui;padding:8px;border-radius:10px;';
             for (const [i,id] of ${JSON.stringify(ids)}.entries()) {
                 const row = document.createElement('div'), label = document.createElement('span');
                 row.setAttribute('data-app-action-sidebar-thread-row','');
@@ -61,6 +62,7 @@ try {
                 row.append(label); pane.append(row);
             }
             document.body.append(pane);
+            pane.showPopover();
             return pane.childElementCount;
         })()`);
     };
@@ -97,9 +99,20 @@ try {
         frame();
         window.finishSample = () => { running=false; return result; };
     })()`);
-    for (const distance of [-1400, 1100]) {
-        await send('Input.synthesizeScrollGesture', { x: 140, y: 170, yDistance: distance, speed: 4200, gestureSourceType: 'mouse' });
-        await pause(150);
+    const point = await waitFor(() => evaluate(`(() => {
+        const pane = document.querySelector('#sample-sidebar'), bounds = pane.getBoundingClientRect();
+        const x = bounds.left + 100, y = bounds.top + 100;
+        return pane.contains(document.elementFromPoint(x,y)) && pane.scrollHeight > pane.clientHeight + 1400 && {x,y};
+    })()`));
+    const offset = () => evaluate("document.querySelector('#sample-sidebar').scrollTop");
+    for (const delta of [1400, -1100]) {
+        const start = await offset();
+        // Use compositor wheel input at a point confirmed to hit the test pane.
+        for (let i = 0; i < 10; i++) {
+            await send('Input.dispatchMouseEvent', { type:'mouseWheel', ...point, deltaX:0, deltaY:delta / 10 });
+            await pause(16);
+        }
+        await waitFor(async () => (await offset() - start) * Math.sign(delta) > Math.abs(delta) * 0.8);
     }
     const metrics = await evaluate('window.finishSample()');
     assert.ok(metrics.movingFrames >= 8 && metrics.travel > 800 && metrics.samples > 100, JSON.stringify(metrics));
@@ -114,4 +127,7 @@ try {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     await exited;
     await styling;
+    for (const key of ['CODEX_HOME', 'CODEX_ELECTRON_USER_DATA_PATH', 'CODEX_RAINBOW_STATE_DIR']) {
+        await rm(env[key], {recursive:true, force:true});
+    }
 }
